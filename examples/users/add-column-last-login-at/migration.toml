@@ -1,0 +1,5 @@
+author = "Timo Stolz <timo.stolz@gmail.com>"
+created_at = 2024-05-23T22:29:43
+transactional = true
+idempotent = true
+dependencies = ["migrations/users"]

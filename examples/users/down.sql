@@ -1,0 +1,1 @@
+drop table test123.users;
