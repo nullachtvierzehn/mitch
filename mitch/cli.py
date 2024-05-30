@@ -84,7 +84,7 @@ def apply(ctx, migration: typing.List[str], files: typing.List[str], target: str
     for f in files:
         lines = click.open_file(f, mode="r", encoding="utf-8").readlines()
         chosen_migration_ids.update(l.strip() for l in lines if not l.isspace())
-    chosen_migrations = repository.by_ids(chosen_migration_ids) 
+    chosen_migrations = list(repository.by_ids(chosen_migration_ids))
 
     # Execute migrations in topological order
     with t.transaction():
@@ -169,7 +169,7 @@ def prune(ctx, except_ids: typing.List[str], except_files: typing.List[str]):
     
     # If no ids were supplied, chose all explicitely installed migrations
     if len(to_be_installed_ids) == 0:
-        to_be_installed_ids |= set(m.id for m in applied_migrations.values() if not m.as_a_dependency)
+        to_be_installed_ids |= set(a.id for a in t.applications.values() if not a.as_a_dependency)
 
     # Get dangling migrations.
     to_be_installed_migrations = repository.by_ids(to_be_installed_ids)
