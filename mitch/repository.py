@@ -80,7 +80,7 @@ class Repository:
     
     def with_migrations(self, applications: Iterable[MigrationApplication]) -> Generator[tuple[MigrationApplication, Optional[Migration]], None, None]:
         for a in applications:
-            yield a, self.available_migrations.get(a.id)
+            yield a, self.available_migrations.get(a.migration_id)
         
 
     def refresh(self):

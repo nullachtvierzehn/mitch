@@ -41,10 +41,10 @@ class PostgreSqlTarget(AbstractTarget):
                 create schema if not exists mitch;
 
                 create table if not exists mitch.applied_migrations (
-                    id text primary key,
-                    sha256_of_up_script char(64) not null,
-                    sha256_of_reformatted_up_script char(64),
-                    as_a_dependency boolean not null default false,
+                    migration_id text primary key,
+                    up_script_sha256 char(64) not null,
+                    reformatted_up_script_sha256 char(64),
+                    is_dependency boolean not null default false,
                     applied_at timestamptz not null default now(),
                     applied_by name not null default current_user
                 );
@@ -61,7 +61,7 @@ class PostgreSqlTarget(AbstractTarget):
                 #assert row.id in available_migrations, f"Missing migration ${row.id}"
                 #applied_migration_ids.add(row.id)
                 #row.migration_on_disk = available_migrations[row.id]
-                self.applications[row.id] = row
+                self.applications[row.migration_id] = row
     
     def with_applications(self, migrations: Iterable[Migration]) -> Generator[tuple[Migration, Optional[MigrationApplication]], None, None]:
         for m in migrations:
@@ -81,20 +81,20 @@ class PostgreSqlTarget(AbstractTarget):
             cur.execute(
                 """
                 insert into mitch.applied_migrations 
-                    (id, as_a_dependency, sha256_of_up_script, sha256_of_reformatted_up_script) 
+                    (migration_id, is_dependency, up_script_sha256, reformatted_up_script_sha256) 
                 values (%s, %s, %s, %s)
-                on conflict (id) do update set
-                    as_a_dependency = excluded.as_a_dependency,
-                    sha256_of_up_script = excluded.sha256_of_up_script,
-                    sha256_of_reformatted_up_script = excluded.sha256_of_reformatted_up_script,
+                on conflict (migration_id) do update set
+                    is_dependency = excluded.is_dependency,
+                    up_script_sha256 = excluded.up_script_sha256,
+                    reformatted_up_script_sha256 = excluded.reformatted_up_script_sha256,
                     applied_at = excluded.applied_at,
                     applied_by = excluded.applied_by
                 """,
                 (
                     migration.id,
                     as_dependency,
-                    migration.sha256_of_up_script,
-                    migration.sha256_of_reformatted_up_script,
+                    migration.up_script_sha256,
+                    migration.reformatted_up_script_sha256,
                 ),
             )
     
@@ -105,29 +105,29 @@ class PostgreSqlTarget(AbstractTarget):
                 click.echo(f"- {multiple_spaces.sub(" ", cmd)} ", nl=False)
                 cur.execute(cmd.encode('utf-8'))
                 click.echo("[ ok ]")
-            cur.execute("delete from mitch.applied_migrations where id = %s", (migration.id,))
+            cur.execute("delete from mitch.applied_migrations where migration_id = %s", (migration.id,))
     
     def fix_hashes_and_status(self, migration: Migration, is_dependency: bool):
         with self.connection.cursor() as cur:
             cur.execute(
                 """
                 update mitch.applied_migrations set
-                    as_a_dependency = %(is_dependency)s,
-                    sha256_of_up_script = %(sha256_of_up_script)s,
-                    sha256_of_reformatted_up_script = %(sha256_of_reformatted_up_script)s
+                    is_dependency = %(is_dependency)s,
+                    up_script_sha256 = %(up_script_sha256)s,
+                    reformatted_up_script_sha256 = %(reformatted_up_script_sha256)s
                 where 
-                    id = %(id)s
+                    migration_id = %(migration_id)s
                     and (
-                        sha256_of_up_script is distinct from %(sha256_of_up_script)s
-                        or sha256_of_reformatted_up_script is distinct from %(sha256_of_reformatted_up_script)s
-                        or as_a_dependency is distinct from %(is_dependency)s
+                        up_script_sha256 is distinct from %(up_script_sha256)s
+                        or reformatted_up_script_sha256 is distinct from %(reformatted_up_script_sha256)s
+                        or is_dependency is distinct from %(is_dependency)s
                     )
                 """,
                 dict(
                     is_dependency=is_dependency,
-                    sha256_of_up_script=migration.sha256_of_up_script,
-                    sha256_of_reformatted_up_script=migration.sha256_of_reformatted_up_script,
-                    id=migration.id
+                    up_script_sha256=migration.up_script_sha256,
+                    reformatted_up_script_sha256=migration.reformatted_up_script_sha256,
+                    migration_id=migration.id
                 )
             )
 

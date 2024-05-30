@@ -16,50 +16,8 @@ import psycopg
 import sqlparse
 from psycopg.rows import class_row
 
-from .migration import Migration
 from .repository import Repository
 from .target import PostgreSqlTarget
-
-multiple_spaces = re.compile(r"\s+", re.MULTILINE)
-
-@dataclass
-class AppliedMigration:
-    id: str
-    sha256_of_up_script: str
-    sha256_of_reformatted_up_script: Optional[str] = None
-    as_a_dependency: bool = False
-    applied_at: datetime = datetime.now()
-    applied_by: str = "current_user"
-    migration_on_disk: Optional[Migration] = field(init=False)
-
-    @property
-    def matching_sha256_of_up_script(self) -> bool | None:
-        if not self.migration_on_disk:
-            return None
-        return self.sha256_of_up_script == self.migration_on_disk.sha256_of_up_script
-
-    @property
-    def matching_sha256_of_reformatted_up_script(self) -> bool | None:
-        if not self.migration_on_disk:
-            return None
-        return (
-            self.sha256_of_reformatted_up_script
-            == self.migration_on_disk.sha256_of_reformatted_up_script
-        )
-
-    @property
-    def matching_sha256(self) -> bool | None:
-        return (
-            self.matching_sha256_of_up_script
-            or self.matching_sha256_of_reformatted_up_script
-        )
-
-
-available_migrations: typing.Dict[str, Migration] = {}
-applied_migration_ids: typing.Set[str] = set()
-applied_migrations: typing.Dict[str, AppliedMigration] = {}
-
-
 
 
 @click.group()
@@ -94,7 +52,7 @@ def apply(ctx, migration: typing.List[str], files: typing.List[str], target: str
 
             # Do not update the dependency flag, if the migration has been already applied.
             if a:
-                is_dependency &= a.as_a_dependency
+                is_dependency &= a.is_dependency
 
             # Furthermore, they should be installed as a dependency, if explicitely flagged as a dependency.
             is_dependency |= as_dependency and m in chosen_migrations
@@ -148,9 +106,9 @@ def unapply(ctx, migration: typing.List[str], with_dependencies: bool, target: s
 @click.pass_context
 def applied(ctx):
     target = PostgreSqlTarget(psycopg.connect())
-    for migration in target.applications.values():
-        if not migration.as_a_dependency:
-            click.echo(f"{migration.id}")
+    for application in target.applications.values():
+        if not application.is_dependency:
+            click.echo(f"{application.migration_id}")
 
 
 @cli.command()
@@ -169,7 +127,7 @@ def prune(ctx, except_ids: typing.List[str], except_files: typing.List[str]):
     
     # If no ids were supplied, chose all explicitely installed migrations
     if len(to_be_installed_ids) == 0:
-        to_be_installed_ids |= set(a.id for a in t.applications.values() if not a.as_a_dependency)
+        to_be_installed_ids |= set(a.migration_id for a in t.applications.values() if not a.is_dependency)
 
     # Get dangling migrations.
     to_be_installed_migrations = repository.by_ids(to_be_installed_ids)

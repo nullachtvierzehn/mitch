@@ -101,11 +101,11 @@ class Migration:
         ]
 
     @property
-    def sha256_of_up_script(self) -> str:
+    def up_script_sha256(self) -> str:
         return sha256(self.up_script.encode("utf-8")).hexdigest()
 
     @property
-    def sha256_of_reformatted_up_script(self) -> str:
+    def reformatted_up_script_sha256(self) -> str:
         return sha256(self.reformatted_up_script.encode("utf-8")).hexdigest()
 
     @property
@@ -115,14 +115,12 @@ class Migration:
 
 @dataclass
 class MigrationApplication:
-    id: str
-    sha256_of_up_script: str
-    sha256_of_reformatted_up_script: Optional[str] = None
-    as_a_dependency: bool = False
+    migration_id: str
+    up_script_sha256: str
+    reformatted_up_script_sha256: Optional[str] = None
+    is_dependency: bool = False
     applied_at: datetime = datetime.now()
     applied_by: str = "current_user"
 
     def matches(self, migration: Migration) -> bool:
-        return self.sha256_of_up_script == migration.sha256_of_up_script or self.sha256_of_reformatted_up_script == migration.sha256_of_reformatted_up_script
-
-from .repository import Repository
+        return self.up_script_sha256 == migration.up_script_sha256 or self.reformatted_up_script_sha256 == migration.reformatted_up_script_sha256
