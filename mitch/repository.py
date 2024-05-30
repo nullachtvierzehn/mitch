@@ -1,8 +1,8 @@
 from pathlib import Path
-from typing import Dict, Generator, Iterable
+from typing import Dict, Generator, Iterable, Optional
 from graphlib import TopologicalSorter
 
-from .migration import Migration
+from .migration import Migration, MigrationApplication
 
 
 class Repository:
@@ -20,7 +20,7 @@ class Repository:
 
         # Fetch configs from disk
         for config_path in self.root_folder.glob("**/migration.toml"):
-            migration = Migration.from_config(config_path, root=self.root_folder)
+            migration = Migration.from_config(config_path, repository=self)
             self.available_migrations[migration.id] = migration
         
         # Connect dependencies
@@ -78,5 +78,10 @@ class Repository:
             except KeyError:
                 raise ValueError(f"Unknown migration {id}")
     
+    def with_migrations(self, applications: Iterable[MigrationApplication]) -> Generator[tuple[MigrationApplication, Optional[Migration]], None, None]:
+        for a in applications:
+            yield a, self.available_migrations.get(a.id)
+        
+
     def refresh(self):
         self._load_available_migrations()

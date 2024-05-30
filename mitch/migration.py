@@ -11,6 +11,7 @@ import sqlparse
 class Migration:
     directory: Path
     id: str
+    repository: 'Repository'
     author: Optional[str] = None
     created_at: Optional[datetime] = None
     dependencies: Set[str] = field(default_factory=set)
@@ -35,14 +36,15 @@ class Migration:
         return (self.created_at or datetime.min, self.id)
 
     @classmethod
-    def from_config(cls, config_path: Path, root: Path = Path.cwd()) -> Self:
+    def from_config(cls, config_path: Path, repository: 'Repository') -> Self:
         config = tomllib.loads(config_path.read_text("utf-8"))
-        config.setdefault("id", str(config_path.parent.relative_to(root)))
+        config.setdefault("id", str(config_path.parent.relative_to(repository.root_folder)))
         relations = config.pop("relations", {})
         dependencies = relations.get("dependencies") or config.pop("dependencies") or set()
         return cls(
             directory=config_path.parent, 
             dependencies=dependencies, 
+            repository=repository,
             **config
         )
 
@@ -122,3 +124,5 @@ class MigrationApplication:
 
     def matches(self, migration: Migration) -> bool:
         return self.sha256_of_up_script == migration.sha256_of_up_script or self.sha256_of_reformatted_up_script == migration.sha256_of_reformatted_up_script
+
+from .repository import Repository
