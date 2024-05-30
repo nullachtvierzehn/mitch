@@ -16,102 +16,11 @@ import psycopg
 import sqlparse
 from psycopg.rows import class_row
 
+from .migration import Migration
+from .repository import Repository
 
 multiple_spaces = re.compile(r"\s+", re.MULTILINE)
 
-@dataclass
-class Migration:
-    directory: Path
-    id: str
-    author: Optional[str] = None
-    created_at: Optional[datetime] = None
-    dependencies: typing.Set[str] = field(default_factory=set)
-    resolved_dependencies: typing.Set["Migration"] = field(
-        default_factory=set, init=False
-    )
-    resolved_dependants: typing.Set["Migration"] = field(
-        default_factory=set, init=False
-    )
-    idempotent: bool = False
-    transactional: bool = True
-
-    def __hash__(self) -> int:
-        return hash(self.id)
-
-    @classmethod
-    def from_config(cls, config_path: Path, root: Path = Path.cwd()) -> "Migration":
-        config = tomllib.loads(config_path.read_text("utf-8"))
-        config.setdefault("id", str(config_path.parent.relative_to(root)))
-        relations = config.pop("relations", {})
-        return cls(
-            directory=config_path.parent, 
-            dependencies=relations.get("dependencies") or config.get("dependencies") or set(), 
-            **config
-        )
-
-    @property
-    def recursive_dependencies(self) -> typing.Set["Migration"]:
-        out = set(self.resolved_dependencies)
-        for dep in self.resolved_dependencies:
-            out |= dep.recursive_dependencies
-        return out
-
-    @property
-    def recursive_dependants(self) -> typing.Set["Migration"]:
-        out = set(self.resolved_dependants)
-        for dep in self.resolved_dependants:
-            out |= dep.recursive_dependants
-        return out
-
-    @property
-    def up_script(self) -> str:
-        return self.directory.joinpath("up.sql").read_text("utf-8")
-
-    @property
-    def reformatted_up_script(self) -> str:
-        return "\n\n".join(
-            sqlparse.format(
-                cmd,
-                keyword_case="lower",
-                identifier_case="lower",
-                strip_comments=True,
-                reindent=True,
-                reindent_aligned=True,
-                use_space_around_operators=True,
-                indent_tabs=False,
-                indent_width=2,
-                comma_first=True,
-            )
-            for cmd in self.commands_of_up_script
-        )
-
-    @property
-    def commands_of_up_script(self) -> typing.List[str]:
-        return [
-            cmd
-            for cmd in sqlparse.split(self.up_script)
-            if not (cmd.isspace() or cmd.startswith("--"))
-        ]
-
-    @property
-    def commands_of_down_script(self) -> typing.List[str]:
-        return [
-            cmd
-            for cmd in sqlparse.split(self.down_script)
-            if not (cmd.isspace() or cmd.startswith("--"))
-        ]
-
-    @property
-    def sha256_of_up_script(self) -> str:
-        return sha256(self.up_script.encode("utf-8")).hexdigest()
-
-    @property
-    def sha256_of_reformatted_up_script(self) -> str:
-        return sha256(self.reformatted_up_script.encode("utf-8")).hexdigest()
-
-    @property
-    def down_script(self) -> str:
-        return self.directory.joinpath("down.sql").read_text("utf-8")
 
 
 db = psycopg.connect(autocommit=False)
@@ -176,6 +85,7 @@ applied_migrations: typing.Dict[str, AppliedMigration] = {}
 def migration_sort_key(migration: Migration) -> tuple[datetime, str]:
     return (migration.created_at or datetime.min, migration.id)
 
+
 def topologically_sorted_dependencies(
     *migration: Migration,
 ) -> typing.Generator[Migration, None, None]:
@@ -187,8 +97,6 @@ def topologically_sorted_dependencies(
     sorter.prepare()
     while sorter.is_active():
         nodes = sorter.get_ready()
-        # Sort by creation date, then by id, so that the order is deterministic.
-        # In case of unknown creation date, we use datetime.min to sort the migrations at the beginning of the list.
         yield from sorted(nodes, key=migration_sort_key)
         sorter.done(*nodes)
 
@@ -204,8 +112,6 @@ def topologically_sorted_dependants(
     sorter.prepare()
     while sorter.is_active():
         nodes = sorter.get_ready()
-        # Sort by creation date, then by id, so that the order is deterministic.
-        # In case of unknown creation date, we use datetime.min to sort the migrations at the beginning of the list.
         yield from sorted(nodes, key=migration_sort_key, reverse=True)
         sorter.done(*nodes)
 
@@ -278,18 +184,18 @@ def cli(ctx):
 @click.argument("migration", nargs=-1)
 @click.pass_context
 def apply(ctx, migration: typing.List[str], files: typing.List[str], target: str, as_dependency: bool, save: str | None):
-    global available_migrations
+    repository = Repository(root_folder=Path.cwd())
 
     # Choose migrations
     chosen_migration_ids = set(migration)
     for f in files:
         lines = click.open_file(f, mode="r", encoding="utf-8").readlines()
         chosen_migration_ids.update(l.strip() for l in lines if not l.isspace())
-    chosen_migrations = {available_migrations[id] for id in chosen_migration_ids}
+    chosen_migrations = repository.by_ids(chosen_migration_ids) 
 
     # Execute migrations in topological order
     with db.transaction(), db.cursor() as cur:
-        for m in topologically_sorted_dependencies(*chosen_migrations):
+        for m in repository.dependencies_of(*chosen_migrations):
             try:
                 # Check, if migration has been already applied.
                 applied_migration = applied_migrations[m.id]
@@ -369,12 +275,12 @@ def apply(ctx, migration: typing.List[str], files: typing.List[str], target: str
 @click.pass_context
 def unapply(ctx, migration: typing.List[str], with_dependencies: bool, target: str):
     # Fetch migration(s)
-    chosen_migrations = [available_migrations[m] for m in migration]
-    chosen_migration_ids = {m.id for m in chosen_migrations}
+    repository = Repository(root_folder=Path.cwd())
+    chosen_migrations = repository.by_ids(migration)
 
     # Execute migrations in topological order
     with db.transaction(), db.cursor() as cur:
-        for m in topologically_sorted_dependants(*chosen_migrations):
+        for m in repository.dependants_of(*chosen_migrations):
             if not m.id in applied_migration_ids:
                 continue
 
@@ -402,6 +308,8 @@ def applied(ctx):
 @click.option("except_files", "--except-from-file", multiple=True, type=click.Path(exists=True, readable=True, file_okay=True, dir_okay=False, allow_dash=True))
 @click.pass_context
 def prune(ctx, except_ids: typing.List[str], except_files: typing.List[str]):
+    repository = Repository(root_folder=Path.cwd())
+
     # Get to be installed ids
     to_be_installed_ids = set(except_ids)
     for f in except_files:
@@ -413,8 +321,8 @@ def prune(ctx, except_ids: typing.List[str], except_files: typing.List[str]):
         to_be_installed_ids |= set(m.id for m in applied_migrations.values() if not m.as_a_dependency)
 
     # Get dangling migrations.
-    to_be_installed_migrations = [m.migration_on_disk for m in applied_migrations.values() if m.id in to_be_installed_ids and m.migration_on_disk]
-    needed_migrations = list(topologically_sorted_dependencies(*to_be_installed_migrations))
+    to_be_installed_migrations = repository.by_ids(to_be_installed_ids)
+    needed_migrations = list(repository.dependencies_of(*to_be_installed_migrations))
     dangling_migrations = [m.migration_on_disk for m in applied_migrations.values() if m.migration_on_disk not in needed_migrations and m.migration_on_disk]
 
     # Execute migrations in topological order
