@@ -116,6 +116,7 @@ class Migration:
 
 @dataclass
 class MigrationApplication:
+    repository_id: str
     migration_id: str
     up_script_sha256: str
     reformatted_up_script_sha256: Optional[str] = None

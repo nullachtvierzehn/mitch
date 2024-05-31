@@ -42,14 +42,25 @@ class PostgreSqlTarget(AbstractTarget):
                 """
                 create schema if not exists mitch;
 
+                create table if not exists mitch.repositories (
+                    repository_id text primary key
+                );
+
                 create table if not exists mitch.applied_migrations (
-                    migration_id text primary key,
+                    repository_id text not null references mitch.repositories(repository_id) on update cascade on delete restrict,
+                    migration_id text not null,
+                    constraint applied_migrations_pk 
+                        primary key (migration_id, repository_id),
                     up_script_sha256 char(64) not null,
                     reformatted_up_script_sha256 char(64),
                     is_dependency boolean not null default false,
                     applied_at timestamptz not null default now(),
                     applied_by name not null default current_user
                 );
+
+                create index if not exists applied_migrations_on_applied_at on mitch.applied_migrations using brin (applied_at);
+                create index if not exists applied_migrations_on_up_script_sha256 on mitch.applied_migrations using hash (up_script_sha256);
+                create index if not exists applied_migrations_on_reformatted_up_script_sha256 on mitch.applied_migrations using hash (reformatted_up_script_sha256);
                 """
             )
 
@@ -96,13 +107,22 @@ class PostgreSqlTarget(AbstractTarget):
                 cur.execute(cmd.encode('utf-8'))
                 click.echo("[ ok ]")
 
-            # Mark migration as applied.            
+            # Mark migration as applied.
+            cur.execute(
+                """
+                insert into mitch.repositories (repository_id)
+                values (%s)
+                on conflict (repository_id) do nothing;
+                """,
+                (migration.repository.name,)
+            )
+
             cur.execute(
                 """
                 insert into mitch.applied_migrations 
-                    (migration_id, is_dependency, up_script_sha256, reformatted_up_script_sha256) 
-                values (%s, %s, %s, %s)
-                on conflict (migration_id) do update set
+                    (repository_id, migration_id, is_dependency, up_script_sha256, reformatted_up_script_sha256) 
+                values (%s, %s, %s, %s, %s)
+                on conflict (repository_id, migration_id) do update set
                     is_dependency = excluded.is_dependency,
                     up_script_sha256 = excluded.up_script_sha256,
                     reformatted_up_script_sha256 = excluded.reformatted_up_script_sha256,
@@ -110,6 +130,7 @@ class PostgreSqlTarget(AbstractTarget):
                     applied_by = excluded.applied_by
                 """,
                 (
+                    migration.repository.name,
                     migration.id,
                     as_dependency,
                     migration.up_script_sha256,
@@ -145,6 +166,7 @@ class PostgreSqlTarget(AbstractTarget):
                     )
                 """,
                 dict(
+                    repository_id=migration.repository.name,
                     is_dependency=is_dependency,
                     up_script_sha256=migration.up_script_sha256,
                     reformatted_up_script_sha256=migration.reformatted_up_script_sha256,
