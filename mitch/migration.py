@@ -1,3 +1,4 @@
+from collections import namedtuple
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Set, List, Self, TYPE_CHECKING
@@ -7,6 +8,7 @@ import tomllib
 
 import sqlparse    
 
+from .utils import CompositeId
 
 @dataclass
 class Migration:
@@ -29,8 +31,8 @@ class Migration:
         return hash((self.id))
 
     @property
-    def id(self) -> tuple[str, str]:
-        return self.repository.name, self.migration_id
+    def id(self) -> CompositeId:
+        return CompositeId(self.repository.name, self.migration_id)
 
     @property
     def sort_key(self) -> tuple[datetime, str, str]:
@@ -130,8 +132,8 @@ class MigrationApplication:
     applied_by: str = "current_user"
 
     @property
-    def id(self) -> tuple[str, str]:
-        return self.repository_id, self.migration_id
+    def id(self) -> CompositeId:
+        return CompositeId(self.repository_id, self.migration_id)
 
     def matches(self, migration: Migration) -> bool:
         return self.up_script_sha256 == migration.up_script_sha256 or self.reformatted_up_script_sha256 == migration.reformatted_up_script_sha256

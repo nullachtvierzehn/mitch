@@ -1,8 +1,10 @@
 from functools import cached_property
 from pathlib import Path
-from typing import Collection, Dict, Generator, Iterable, Optional, Self, overload
+from typing import Dict, Generator, Iterable, Optional, Self
 from graphlib import TopologicalSorter
 import tomllib
+
+from .utils import CompositeId
 
 
 class Repository:
@@ -60,9 +62,9 @@ class Repository:
             yield from self._discover_migrations(child)
 
     @cached_property
-    def migrations(self) -> Dict[tuple[str, str], 'Migration']:
+    def migrations(self) -> Dict[CompositeId, 'Migration']:
         # Fetch configs from disk
-        _migrations: Dict[tuple[str, str], 'Migration'] = {}
+        _migrations: Dict[CompositeId, 'Migration'] = {}
         for config_path in self._discover_migrations(self.root_folder):
             migration = Migration.from_config(config_path, repository=self)
             _migrations[migration.id] = migration
@@ -122,15 +124,8 @@ class Repository:
         for id in ids:
             yield self.by_id(id)
     
-    def _normalize_id(self, id: str | tuple[str, str]) -> tuple[str, str]:
-        if isinstance(id, tuple):
-            return id
-        else:
-            parts = tuple(id.split(":", 1))
-            if len(parts) == 2:
-                return parts
-            else:
-                return (self.name, id)
+    def _normalize_id(self, id: str | tuple[str, str]) -> CompositeId:
+        return CompositeId.from_string_or_tuple(id, self.name)
 
     def by_id(self, id: str | tuple[str, str]) -> 'Migration':
         try: 

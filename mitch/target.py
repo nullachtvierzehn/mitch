@@ -9,6 +9,7 @@ import click
 from mitch.repository import Repository
 
 from .migration import MigrationApplication, Migration
+from .utils import CompositeId
 
 
 multiple_spaces = re.compile(r"\s+", re.MULTILINE)
@@ -20,7 +21,7 @@ class AbstractTarget:
 
 class PostgreSqlTarget(AbstractTarget):
     connection: Connection
-    _applications: Dict[tuple[str, str], MigrationApplication]
+    _applications: Dict[CompositeId, MigrationApplication]
 
     def __init__(self, connection: Connection):
         self.connection = connection
@@ -66,11 +67,11 @@ class PostgreSqlTarget(AbstractTarget):
             )
 
     @cached_property
-    def applications(self) -> Dict[tuple[str, str], MigrationApplication]:
+    def applications(self) -> Dict[CompositeId, MigrationApplication]:
         with self.transaction():
             cur = self.connection.cursor(row_factory=class_row(MigrationApplication))
             cur.execute("select * from mitch.applied_migrations")
-            return {(row.repository_id, row.migration_id): row for row in cur.fetchall()}
+            return {CompositeId(row.repository_id, row.migration_id): row for row in cur.fetchall()}
 
     def with_applications(self, migrations: Iterable[Migration]) -> Generator[tuple[Migration, Optional[MigrationApplication]], None, None]:
         for m in migrations:
