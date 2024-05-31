@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Collection, Dict, Generator, Iterable, Optional, Self
+from typing import Dict, Generator, Iterable, Optional, Self
 from graphlib import TopologicalSorter    
 
 

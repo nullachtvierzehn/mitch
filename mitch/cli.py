@@ -1,23 +1,28 @@
 #!/usr/bin/env python
 
 import typing
-from dataclasses import dataclass, field
-from datetime import datetime
-from graphlib import TopologicalSorter
-from hashlib import sha256
-from pathlib import Path
-from typing import Optional
-import tomllib
-import re
 import sys
 
 import click
 import psycopg
-import sqlparse
-from psycopg.rows import class_row
 
 from .repository import Repository
 from .target import PostgreSqlTarget
+
+
+def complete_available_migration_id(ctx, param, incomplete):
+    try:
+        repository = Repository.from_closest_parent()
+    except FileNotFoundError:
+        return []
+    else:
+        return [id for id in repository.migrations.keys() if id.startswith(incomplete)]
+
+
+def complete_installed_migration_id(ctx, param, incomplete):
+    with psycopg.connect() as db:
+        cur = db.execute("select migration_id from mitch.applied_migrations where migration_id like %s", (incomplete + "%",))
+        return [row[0] for row in cur.fetchall()]
 
 
 @click.group()
@@ -25,13 +30,13 @@ def cli():
     pass
 
 
-@cli.command()
+@cli.command("up")
 @click.option("--target", "-t", default="default")
 @click.option("files", "--from-file", multiple=True, type=click.Path(exists=True, readable=True, file_okay=True, dir_okay=False, allow_dash=True))
 @click.option("--save", type=click.Path(writable=True, file_okay=True, dir_okay=False, allow_dash=False), default=None)
 @click.option("--as-dependency", is_flag=True, default=False)
-@click.argument("migration", nargs=-1)
-def up(migration: typing.List[str], files: typing.List[str], target: str, as_dependency: bool, save: str | None):
+@click.argument("migration", nargs=-1, shell_complete=complete_available_migration_id)
+def up_migration(migration: typing.List[str], files: typing.List[str], target: str, as_dependency: bool, save: str | None):
     try:
         repository = Repository.from_closest_parent()
     except (FileNotFoundError, NotADirectoryError) as e:
@@ -84,12 +89,11 @@ def up(migration: typing.List[str], files: typing.List[str], target: str, as_dep
 
 
 @cli.command()
-@click.option("--with-dependencies/--without-dependencies", "-d/-D", default=False)
 @click.option("--target", "-t", default="default")
 @click.option("--yes", is_flag=True, default=False)
 @click.option("--prune", is_flag=True, default=False)
-@click.argument("migration", nargs=-1)
-def down(migration: typing.List[str], with_dependencies: bool, yes: bool, prune: bool, target: str):
+@click.argument("migration", nargs=-1, shell_complete=complete_installed_migration_id)
+def down(migration: typing.List[str], yes: bool, prune: bool, target: str):
     # Fetch migration(s)
     try:
         repository = Repository.from_closest_parent()
@@ -101,7 +105,7 @@ def down(migration: typing.List[str], with_dependencies: bool, yes: bool, prune:
     dependants = list(repository.dependants_of(chosen_migrations))
 
     # Confirm migrations that must be taken down but weren't explicitely selected.
-    confirm_migrations = list(m for m in dependants if m not in chosen_migrations)
+    confirm_migrations = list(m for m, a in t.with_applications(dependants) if a and m not in chosen_migrations)
     confirm_migrations.sort(key=lambda m: m.id)
     if not yes and len(confirm_migrations) > 0:
         click.echo(f"The following migrations will be removed:")
@@ -120,19 +124,10 @@ def down(migration: typing.List[str], with_dependencies: bool, yes: bool, prune:
         if prune:
             click.echo("Prune stale dependencies...")
             t.prune(repository)
-        
 
 
 @cli.command()
-def applied():
-    target = PostgreSqlTarget(psycopg.connect())
-    for application in target.applications.values():
-        if not application.is_dependency:
-            click.echo(f"{application.migration_id}")
-
-
-@cli.command()
-@click.option("except_ids", "--except", multiple=True)
+@click.option("except_ids", "--except", multiple=True,  shell_complete=complete_installed_migration_id)
 @click.option("except_files", "--except-from-file", multiple=True, type=click.Path(exists=True, readable=True, file_okay=True, dir_okay=False, allow_dash=True))
 def prune(except_ids: typing.List[str], except_files: typing.List[str]):
     try:
@@ -153,6 +148,40 @@ def prune(except_ids: typing.List[str], except_files: typing.List[str]):
 
     # Remove all migrations, except the ones that are to be installed.
     t.prune(repository, except_migrations=to_be_installed)
+
+
+@cli.group()
+def ls():
+    pass
+
+@ls.command("up")
+@click.option("--include-dependencies/--without-dependencies", "-d/-D", default=False)
+def list_migrations_if_up(include_dependencies: bool):
+    target = PostgreSqlTarget(psycopg.connect())
+    try:
+        repository = Repository.from_closest_parent()
+    except (FileNotFoundError, NotADirectoryError) as e:
+        raise click.UsageError(str(e)) from e
+    for migration in target.installed_migrations(repository, include_dependencies=include_dependencies):
+        click.echo(f"{migration.id}")
+
+
+@ls.command()
+def available():
+    target = PostgreSqlTarget(psycopg.connect())
+    try:
+        repository = Repository.from_closest_parent()
+    except (FileNotFoundError, NotADirectoryError) as e:
+        raise click.UsageError(str(e)) from e
+    
+    for m, a in target.with_applications(repository.migrations.values()):
+        if not a:
+            click.echo(f"{m.id}")
+        elif a.is_dependency:
+            click.echo(f"{m.id} (applied as dependency)")
+        else:
+            click.echo(f"{m.id} (applied)")
+
 
 if __name__ == "__main__":
     cli()
