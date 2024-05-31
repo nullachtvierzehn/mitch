@@ -20,7 +20,7 @@ class AbstractTarget:
 
 class PostgreSqlTarget(AbstractTarget):
     connection: Connection
-    _applications: Dict[str, MigrationApplication]
+    _applications: Dict[tuple[str, str], MigrationApplication]
 
     def __init__(self, connection: Connection):
         self.connection = connection
@@ -61,15 +61,16 @@ class PostgreSqlTarget(AbstractTarget):
                 create index if not exists applied_migrations_on_applied_at on mitch.applied_migrations using brin (applied_at);
                 create index if not exists applied_migrations_on_up_script_sha256 on mitch.applied_migrations using hash (up_script_sha256);
                 create index if not exists applied_migrations_on_reformatted_up_script_sha256 on mitch.applied_migrations using hash (reformatted_up_script_sha256);
+                create index if not exists applied_migrations_on_composite_id on mitch.applied_migrations using btree ((repository_id || ':' || migration_id));
                 """
             )
 
     @cached_property
-    def applications(self) -> Dict[str, MigrationApplication]:
+    def applications(self) -> Dict[tuple[str, str], MigrationApplication]:
         with self.transaction():
             cur = self.connection.cursor(row_factory=class_row(MigrationApplication))
             cur.execute("select * from mitch.applied_migrations")
-            return {row.migration_id: row for row in cur.fetchall()}
+            return {(row.repository_id, row.migration_id): row for row in cur.fetchall()}
 
     def with_applications(self, migrations: Iterable[Migration]) -> Generator[tuple[Migration, Optional[MigrationApplication]], None, None]:
         for m in migrations:

@@ -1,6 +1,6 @@
 from functools import cached_property
 from pathlib import Path
-from typing import Dict, Generator, Iterable, Optional, Self
+from typing import Collection, Dict, Generator, Iterable, Optional, Self, overload
 from graphlib import TopologicalSorter
 import tomllib
 
@@ -60,9 +60,9 @@ class Repository:
             yield from self._discover_migrations(child)
 
     @cached_property
-    def migrations(self) -> Dict[str, 'Migration']:
+    def migrations(self) -> Dict[tuple[str, str], 'Migration']:
         # Fetch configs from disk
-        _migrations = {}
+        _migrations: Dict[tuple[str, str], 'Migration'] = {}
         for config_path in self._discover_migrations(self.root_folder):
             migration = Migration.from_config(config_path, repository=self)
             _migrations[migration.id] = migration
@@ -79,6 +79,7 @@ class Repository:
                     )
 
                 # Connect dependency
+                dependency_name = self._normalize_id(dependency_name)
                 try:
                     dependency = _migrations[dependency_name]
                 except KeyError:
@@ -116,17 +117,33 @@ class Repository:
             # In case of unknown creation date, we use datetime.min to sort the migrations at the beginning of the list.
             yield from sorted(nodes, key=lambda m: m.sort_key, reverse=True)
             sorter.done(*nodes)
-    
-    def by_ids(self, ids: Iterable[str]) -> Generator['Migration', None, None]:
+
+    def by_ids(self, ids: Iterable[str | tuple[str, str]]) -> Generator['Migration', None, None]:
         for id in ids:
-            try:
-                yield self.migrations[id]
-            except KeyError:
-                raise ValueError(f"Unknown migration {id}")
+            yield self.by_id(id)
     
+    def _normalize_id(self, id: str | tuple[str, str]) -> tuple[str, str]:
+        if isinstance(id, tuple):
+            return id
+        else:
+            parts = tuple(id.split(":", 1))
+            if len(parts) == 2:
+                return parts
+            else:
+                return (self.name, id)
+
+    def by_id(self, id: str | tuple[str, str]) -> 'Migration':
+        try: 
+            return self.migrations[self._normalize_id(id)]
+        except KeyError as e:
+            raise KeyError(f"Unknown migration {id}") from e
+
     def with_migrations(self, applications: Iterable['MigrationApplication']) -> Generator[tuple['MigrationApplication', Optional['Migration']], None, None]:
         for a in applications:
-            yield a, self.migrations.get(a.migration_id)
+            try:
+                yield a, self.by_id(a.id)
+            except KeyError:
+                yield a, None
 
 
 from .migration import Migration, MigrationApplication

@@ -16,13 +16,25 @@ def complete_available_migration_id(ctx, param, incomplete):
     except FileNotFoundError:
         return []
     else:
-        return [id for id in repository.migrations.keys() if id.startswith(incomplete)]
+        return [
+            f"{r}:{m}" for (r, m) in repository.migrations.keys() 
+            if m.startswith(incomplete) or f"{r}:{m}".startswith(incomplete)
+        ]
 
 
 def complete_installed_migration_id(ctx, param, incomplete):
     with psycopg.connect() as db:
-        cur = db.execute("select migration_id from mitch.applied_migrations where migration_id like %s", (incomplete + "%",))
-        return [row[0] for row in cur.fetchall()]
+        cur = db.execute(
+            """
+            select repository_id, migration_id 
+            from mitch.applied_migrations 
+            where 
+                migration_id like %(1)s 
+                or (repository_id || ':' || migration_id) like %(1)s
+            """, 
+            (incomplete + "%",)
+        )
+        return [":".join(row) for row in cur.fetchall()]
 
 
 @click.group()

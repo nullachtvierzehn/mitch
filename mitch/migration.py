@@ -11,7 +11,7 @@ import sqlparse
 @dataclass
 class Migration:
     directory: Path
-    id: str
+    migration_id: str
     repository: 'Repository'
     author: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -26,25 +26,30 @@ class Migration:
     transactional: bool = True
 
     def __hash__(self) -> int:
-        return hash(self.id)
+        return hash((self.id))
 
     @property
-    def sort_key(self) -> tuple[datetime, str]:
+    def id(self) -> tuple[str, str]:
+        return self.repository.name, self.migration_id
+
+    @property
+    def sort_key(self) -> tuple[datetime, str, str]:
         """
-        Sort by creation date, then by id, so that the order is deterministic.
+        Sort by creation date, then by repository id, then by migration id, so that the order is deterministic.
         In case of unknown creation date, we use datetime.min to sort the migrations at the beginning of the list.
         """
-        return (self.created_at or datetime.min, self.id)
+        return (self.created_at or datetime.min, self.repository.name, self.migration_id)
 
     @classmethod
     def from_config(cls, config_path: Path, repository: 'Repository') -> Self:
         config = tomllib.loads(config_path.read_text("utf-8"))
-        config.setdefault("id", str(config_path.parent.relative_to(repository.root_folder)))
+        migration_id = config.pop("id", str(config_path.parent.relative_to(repository.root_folder)))
         relations = config.pop("relations", {})
         dependencies = relations.get("dependencies") or config.pop("dependencies") or set()
         return cls(
             directory=config_path.parent, 
-            dependencies=dependencies, 
+            dependencies=dependencies,
+            migration_id=migration_id,
             repository=repository,
             **config
         )
@@ -123,6 +128,10 @@ class MigrationApplication:
     is_dependency: bool = False
     applied_at: datetime = datetime.now()
     applied_by: str = "current_user"
+
+    @property
+    def id(self) -> tuple[str, str]:
+        return self.repository_id, self.migration_id
 
     def matches(self, migration: Migration) -> bool:
         return self.up_script_sha256 == migration.up_script_sha256 or self.reformatted_up_script_sha256 == migration.reformatted_up_script_sha256
