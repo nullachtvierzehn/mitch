@@ -82,6 +82,11 @@ class PostgreSqlTarget(AbstractTarget):
             if m and (not a.is_dependency or include_dependencies):
                 yield m
     
+    def modified_migrations(self, repository: Repository) -> Generator[tuple[MigrationApplication, Migration], None, None]:
+        for a, m in repository.with_migrations(self.applications.values()):
+            if m and not a.matches(m):
+                yield a, m
+
     def prune(self, repository: Repository, except_migrations: Collection[Migration] = ()) -> None:
         installed_migrations = set(self.installed_migrations(repository, include_dependencies=True))
         needed_migrations = set(
