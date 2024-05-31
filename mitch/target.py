@@ -55,11 +55,11 @@ class PostgreSqlTarget(AbstractTarget):
                     up_script_sha256 char(64) not null,
                     reformatted_up_script_sha256 char(64),
                     is_dependency boolean not null default false,
-                    applied_at timestamptz not null default now(),
+                    applied_at timestamptz not null default statement_timestamp(),
                     applied_by name not null default current_user
                 );
 
-                create index if not exists applied_migrations_on_applied_at on mitch.applied_migrations using brin (applied_at);
+                create index if not exists applied_migrations_on_applied_at on mitch.applied_migrations using btree (applied_at);
                 create index if not exists applied_migrations_on_up_script_sha256 on mitch.applied_migrations using hash (up_script_sha256);
                 create index if not exists applied_migrations_on_reformatted_up_script_sha256 on mitch.applied_migrations using hash (reformatted_up_script_sha256);
                 create index if not exists applied_migrations_on_composite_id on mitch.applied_migrations using btree ((repository_id || ':' || migration_id));
@@ -70,7 +70,7 @@ class PostgreSqlTarget(AbstractTarget):
     def applications(self) -> Dict[CompositeId, MigrationApplication]:
         with self.transaction():
             cur = self.connection.cursor(row_factory=class_row(MigrationApplication))
-            cur.execute("select * from mitch.applied_migrations")
+            cur.execute("select * from mitch.applied_migrations order by applied_at")
             return {CompositeId(row.repository_id, row.migration_id): row for row in cur.fetchall()}
 
     def with_applications(self, migrations: Iterable[Migration]) -> Generator[tuple[Migration, Optional[MigrationApplication]], None, None]:
@@ -133,7 +133,7 @@ class PostgreSqlTarget(AbstractTarget):
                 """,
                 (
                     migration.repository.name,
-                    migration.id,
+                    migration.migration_id,
                     as_dependency,
                     migration.up_script_sha256,
                     migration.reformatted_up_script_sha256,
@@ -161,6 +161,7 @@ class PostgreSqlTarget(AbstractTarget):
                     reformatted_up_script_sha256 = %(reformatted_up_script_sha256)s
                 where 
                     migration_id = %(migration_id)s
+                    and repository_id = %(repository_id)s
                     and (
                         up_script_sha256 is distinct from %(up_script_sha256)s
                         or reformatted_up_script_sha256 is distinct from %(reformatted_up_script_sha256)s
@@ -172,7 +173,7 @@ class PostgreSqlTarget(AbstractTarget):
                     is_dependency=is_dependency,
                     up_script_sha256=migration.up_script_sha256,
                     reformatted_up_script_sha256=migration.reformatted_up_script_sha256,
-                    migration_id=migration.id
+                    migration_id=migration.migration_id
                 )
             )
         del self.applications

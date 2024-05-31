@@ -8,7 +8,7 @@ import psycopg
 
 from .repository import Repository
 from .target import PostgreSqlTarget
-
+from .utils import CompositeId
 
 def complete_available_migration_id(ctx, param, incomplete):
     try:
@@ -17,8 +17,8 @@ def complete_available_migration_id(ctx, param, incomplete):
         return []
     else:
         return [
-            f"{r}:{m}" for (r, m) in repository.migrations.keys() 
-            if m.startswith(incomplete) or f"{r}:{m}".startswith(incomplete)
+            str(m.id) for k, m in repository.migrations.items() 
+            if k[1].startswith(incomplete) or str(m.id).startswith(incomplete)
         ]
 
 
@@ -34,7 +34,7 @@ def complete_installed_migration_id(ctx, param, incomplete):
             """, 
             (incomplete + "%",)
         )
-        return [":".join(row) for row in cur.fetchall()]
+        return [str(CompositeId.from_tuple(row)) for row in cur.fetchall()]
 
 
 @click.group()
@@ -65,16 +65,19 @@ def up_migration(migration: typing.List[str], files: typing.List[str], target: s
     # Execute migrations in topological order
     with t.transaction():
         for m, a in t.with_applications(repository.dependencies_of(chosen_migrations)):
-            # Migrations shoud be installed as a dependency, if they are not explicitely chosen.
-            is_dependency = m not in chosen_migrations
+            # Is explicitely chosen.
+            is_explicit = m in chosen_migrations
 
-            # Do not update the dependency flag, if the migration has been already applied.
-            if a:
-                is_dependency &= a.is_dependency
+            # Was explicitely chosen before
+            if a:  
+                is_explicit |= not a.is_dependency
 
-            # Furthermore, they should be installed as a dependency, if explicitely flagged as a dependency.
-            is_dependency |= as_dependency and m in chosen_migrations
+            # Should explicitely be marked as a dependency.
+            if as_dependency and m in chosen_migrations:
+                is_explicit = False
             
+            is_dependency = not is_explicit
+
             # Run migration, if not already applied.
             if not a:
                 t.up(m, as_dependency=is_dependency)
@@ -82,6 +85,7 @@ def up_migration(migration: typing.List[str], files: typing.List[str], target: s
             # Skip migration, if already applied with the same script.
             elif a.matches(m):
                 click.echo(f"Migration {m.id} already applied. [ skipped ]")
+                #click.echo(f"Shoud be marked as dependency: {is_dependency}")
                 t.fix_hashes_and_status(m, is_dependency=is_dependency)
             
             # Re-run idempotent migrations, if already applied with a different script.
