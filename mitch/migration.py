@@ -1,11 +1,12 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Set, List, Self
+from typing import Optional, Set, List, Self, TYPE_CHECKING
 from datetime import datetime
 from hashlib import sha256
 import tomllib
 
-import sqlparse
+import sqlparse    
+
 
 @dataclass
 class Migration:
@@ -124,3 +125,6 @@ class MigrationApplication:
 
     def matches(self, migration: Migration) -> bool:
         return self.up_script_sha256 == migration.up_script_sha256 or self.reformatted_up_script_sha256 == migration.reformatted_up_script_sha256
+
+
+from .repository import Repository

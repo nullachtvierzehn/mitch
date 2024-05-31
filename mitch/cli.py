@@ -21,8 +21,7 @@ from .target import PostgreSqlTarget
 
 
 @click.group()
-@click.pass_context
-def cli(ctx):
+def cli():
     pass
 
 
@@ -32,9 +31,11 @@ def cli(ctx):
 @click.option("--save", type=click.Path(writable=True, file_okay=True, dir_okay=False, allow_dash=False), default=None)
 @click.option("--as-dependency", is_flag=True, default=False)
 @click.argument("migration", nargs=-1)
-@click.pass_context
-def apply(ctx, migration: typing.List[str], files: typing.List[str], target: str, as_dependency: bool, save: str | None):
-    repository = Repository(root_folder=Path.cwd())
+def up(migration: typing.List[str], files: typing.List[str], target: str, as_dependency: bool, save: str | None):
+    try:
+        repository = Repository.from_closest_parent()
+    except (FileNotFoundError, NotADirectoryError) as e:
+        raise click.UsageError(str(e)) from e
     t = PostgreSqlTarget(psycopg.connect())
 
     # Choose migrations by ids.
@@ -46,7 +47,7 @@ def apply(ctx, migration: typing.List[str], files: typing.List[str], target: str
 
     # Execute migrations in topological order
     with t.transaction():
-        for m, a in t.with_applications(repository.dependencies_of(*chosen_migrations)):
+        for m, a in t.with_applications(repository.dependencies_of(chosen_migrations)):
             # Migrations shoud be installed as a dependency, if they are not explicitely chosen.
             is_dependency = m not in chosen_migrations
 
@@ -85,26 +86,45 @@ def apply(ctx, migration: typing.List[str], files: typing.List[str], target: str
 @cli.command()
 @click.option("--with-dependencies/--without-dependencies", "-d/-D", default=False)
 @click.option("--target", "-t", default="default")
+@click.option("--yes", is_flag=True, default=False)
+@click.option("--prune", is_flag=True, default=False)
 @click.argument("migration", nargs=-1)
-@click.pass_context
-def unapply(ctx, migration: typing.List[str], with_dependencies: bool, target: str):
+def down(migration: typing.List[str], with_dependencies: bool, yes: bool, prune: bool, target: str):
     # Fetch migration(s)
-    repository = Repository(root_folder=Path.cwd())
+    try:
+        repository = Repository.from_closest_parent()
+    except (FileNotFoundError, NotADirectoryError) as e:
+        raise click.UsageError(str(e)) from e
     t = PostgreSqlTarget(psycopg.connect())
-    chosen_migrations = repository.by_ids(migration)
+    
+    chosen_migrations = set(repository.by_ids(migration))
+    dependants = list(repository.dependants_of(chosen_migrations))
+
+    # Confirm migrations that must be taken down but weren't explicitely selected.
+    confirm_migrations = list(m for m in dependants if m not in chosen_migrations)
+    confirm_migrations.sort(key=lambda m: m.id)
+    if not yes and len(confirm_migrations) > 0:
+        click.echo(f"The following migrations will be removed:")
+        for m in confirm_migrations:
+            click.echo(f"- {m.id}")
+        if not click.confirm("Do you want to remove them?"):
+            sys.exit(0)
 
     # Execute migrations in topological order
     with t.transaction():
-        for m, a in t.with_applications(repository.dependants_of(*chosen_migrations)):
-            if not a:
-                continue
-            else:
+        for m, a in t.with_applications(dependants):
+            if a:
                 t.down(m)
+    
+        # Prune migrations, if requested.
+        if prune:
+            click.echo("Prune stale dependencies...")
+            t.prune(repository)
+        
 
 
 @cli.command()
-@click.pass_context
-def applied(ctx):
+def applied():
     target = PostgreSqlTarget(psycopg.connect())
     for application in target.applications.values():
         if not application.is_dependency:
@@ -114,38 +134,25 @@ def applied(ctx):
 @cli.command()
 @click.option("except_ids", "--except", multiple=True)
 @click.option("except_files", "--except-from-file", multiple=True, type=click.Path(exists=True, readable=True, file_okay=True, dir_okay=False, allow_dash=True))
-@click.pass_context
-def prune(ctx, except_ids: typing.List[str], except_files: typing.List[str]):
-    repository = Repository(root_folder=Path.cwd())
+def prune(except_ids: typing.List[str], except_files: typing.List[str]):
+    try:
+        repository = Repository.from_closest_parent()
+    except (FileNotFoundError, NotADirectoryError) as e:
+        raise click.UsageError(str(e)) from e
     t = PostgreSqlTarget(psycopg.connect())
 
-    # Get to be installed ids
+    # Get migrations that should remain installed.
     to_be_installed_ids = set(except_ids)
     for f in except_files:
-        lines = click.open_file(f, mode="r", encoding="utf-8").readlines()
-        to_be_installed_ids.update(l.strip() for l in lines if not l.isspace())
-    
-    # If no ids were supplied, chose all explicitely installed migrations
-    if len(to_be_installed_ids) == 0:
-        to_be_installed_ids |= set(a.migration_id for a in t.applications.values() if not a.is_dependency)
+        to_be_installed_ids.update(
+            line.strip() 
+            for lines in click.open_file(f, mode="r", encoding="utf-8").readlines()
+            for line in lines if not line.isspace()
+        )
+    to_be_installed = list(repository.by_ids(to_be_installed_ids))
 
-    # Get dangling migrations.
-    to_be_installed_migrations = repository.by_ids(to_be_installed_ids)
-    needed_migrations = list(repository.dependencies_of(*to_be_installed_migrations))
-    dangling_migrations = [m for a, m in repository.with_migrations(t.applications.values()) if m and m not in needed_migrations]
-
-    # Execute migrations in topological order
-    with t.transaction():
-        for m in reversed(list(repository.dependencies_of(*dangling_migrations))):
-            if m in dangling_migrations:
-                t.down(m)
-
-
-cli.add_command(apply)
-cli.add_command(unapply)
-cli.add_command(applied)
-cli.add_command(prune)
-
+    # Remove all migrations, except the ones that are to be installed.
+    t.prune(repository, except_migrations=to_be_installed)
 
 if __name__ == "__main__":
     cli()

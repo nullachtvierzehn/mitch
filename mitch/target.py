@@ -1,9 +1,12 @@
-from typing import Dict, Generator, Iterable, Optional
+from typing import Dict, Generator, Iterable, Optional, Collection
 from psycopg import Connection
-from psycopg.rows import class_row
+from functools import cached_property
 import re
 
+from psycopg.rows import class_row
 import click
+
+from mitch.repository import Repository
 
 from .migration import MigrationApplication, Migration
 
@@ -17,18 +20,17 @@ class AbstractTarget:
 
 class PostgreSqlTarget(AbstractTarget):
     connection: Connection
-    applications: Dict[str, MigrationApplication]
+    _applications: Dict[str, MigrationApplication]
 
     def __init__(self, connection: Connection):
         self.connection = connection
         self.connection.autocommit = False
         self.install_or_update_mitch_in_database()
-        self.applications = dict()
-        self._load_applications()
+        self._applications = dict()
         super().__init__()
     
-    def transaction(self):
-        return self.connection.transaction()
+    def transaction(self, force_rollback: bool = False):
+        return self.connection.transaction(force_rollback=force_rollback)
 
     def install_or_update_mitch_in_database(self):
         """
@@ -51,22 +53,39 @@ class PostgreSqlTarget(AbstractTarget):
                 """
             )
 
-
-    def _load_applications(self):
-        self.applications.clear()
+    @cached_property
+    def applications(self) -> Dict[str, MigrationApplication]:
         with self.transaction():
             cur = self.connection.cursor(row_factory=class_row(MigrationApplication))
-            cur.execute("select * from mitch.applied_migrations order by applied_at asc")
-            for row in cur.fetchall():
-                #assert row.id in available_migrations, f"Missing migration ${row.id}"
-                #applied_migration_ids.add(row.id)
-                #row.migration_on_disk = available_migrations[row.id]
-                self.applications[row.migration_id] = row
-    
+            cur.execute("select * from mitch.applied_migrations")
+            return {row.migration_id: row for row in cur.fetchall()}
+
     def with_applications(self, migrations: Iterable[Migration]) -> Generator[tuple[Migration, Optional[MigrationApplication]], None, None]:
         for m in migrations:
             yield m, self.applications.get(m.id)
     
+    def installed_migrations(self, repository: Repository, include_dependencies: bool = False) -> Generator[Migration, None, None]:
+        for a, m in repository.with_migrations(self.applications.values()):
+            if m and (not a.is_dependency or include_dependencies):
+                yield m
+    
+    def prune(self, repository: Repository, except_migrations: Collection[Migration] = ()) -> None:
+        installed_migrations = set(self.installed_migrations(repository, include_dependencies=True))
+        needed_migrations = set(
+            except_migrations 
+            if len(except_migrations) > 0 
+            else self.installed_migrations(repository, include_dependencies=False)
+        )
+        dangling_migrations = installed_migrations - needed_migrations
+        
+        with self.transaction():
+            # Execute migrations in topological order
+            for m in reversed(list(
+                m for m in repository.dependencies_of(dangling_migrations) 
+                if m in dangling_migrations
+            )):
+                self.down(m)
+
 
     def up(self, migration: Migration, as_dependency: bool):
         click.echo(f"Run migration {migration.id}")
@@ -97,6 +116,7 @@ class PostgreSqlTarget(AbstractTarget):
                     migration.reformatted_up_script_sha256,
                 ),
             )
+        del self.applications
     
     def down(self, migration: Migration):
         with self.connection.cursor() as cur:
@@ -106,6 +126,7 @@ class PostgreSqlTarget(AbstractTarget):
                 cur.execute(cmd.encode('utf-8'))
                 click.echo("[ ok ]")
             cur.execute("delete from mitch.applied_migrations where migration_id = %s", (migration.id,))
+        del self.applications
     
     def fix_hashes_and_status(self, migration: Migration, is_dependency: bool):
         with self.connection.cursor() as cur:
@@ -130,7 +151,4 @@ class PostgreSqlTarget(AbstractTarget):
                     migration_id=migration.id
                 )
             )
-
-
-    def refresh(self):
-        self._load_applications()
+        del self.applications
