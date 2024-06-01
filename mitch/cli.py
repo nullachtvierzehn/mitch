@@ -251,6 +251,11 @@ def available():
         else:
             click.echo(f"{m.id} (applied)")
 
+@ls.command()
+def repositories():
+    repository = Repository.from_closest_parent()
+    for repo in [repository.root, *repository.root.subrepositories.values()]:
+        click.echo(f"{repo.name}")
 
 @cli.group()
 def add():
