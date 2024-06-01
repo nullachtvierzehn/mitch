@@ -297,7 +297,7 @@ def add_migration(path: Path, id: Optional[str], transactional: bool, idempotent
         else:
             fp.write("dependencies = [\n")
             for d in resolved_dependencies:
-                fp.write(f"    {d.id},\n")
+                fp.write(f"    {repr(str(d.id))},\n")
             fp.write("]")
 
 
