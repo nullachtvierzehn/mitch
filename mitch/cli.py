@@ -66,7 +66,12 @@ def up_migration(migration: typing.List[str], files: typing.List[str], target: s
 
     # Execute migrations in topological order
     with t.transaction():
-        for m, a in t.with_applications(repository.dependencies_of(chosen_migrations)):
+        deploy = list(t.with_applications(repository.dependencies_of(chosen_migrations)))
+        n = str(len(deploy))
+        nn = len(n)
+        for i, (m, a) in enumerate(deploy):
+            click.echo(f"[ {i+1: >{nn}} / {n} ] Run migration {m.id}")
+
             # Is explicitely chosen.
             is_explicit = m in chosen_migrations
 
@@ -332,7 +337,7 @@ if __name__ == "__main__":
     cli()
 
 # Roadmap:
-# - [ ] Command to add migrations
+# - [x] Command to add migrations
 # - [ ] Command to rework a migration, similar to sqitch rework.
 # - [x] Command to re-apply some migrations, similar to sqitch rebase.
 # - [x] Command to apply migrations from a plan (like a pip install from a requirements file.)
@@ -341,6 +346,6 @@ if __name__ == "__main__":
 # - Add support for configurable target databases
 #   - Take care of sensitive information. Credentials must be managable outside version control.
 # - [x] Allow for relative paths in dependencies
-# - [ ] Allow for multiple repositories (to fetch migrations from)
+# - [x] Allow for multiple repositories (to fetch migrations from)
 # - [ ] Allow for multiple targets (each with a separate toml file)
 # - Test performance for hundreds/thousands of migrations

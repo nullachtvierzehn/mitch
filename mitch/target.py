@@ -1,6 +1,7 @@
 from typing import Dict, Generator, Iterable, Optional, Collection
 from psycopg import Connection
 from functools import cached_property
+from shutil import get_terminal_size
 import re
 
 from psycopg.rows import class_row
@@ -105,13 +106,13 @@ class PostgreSqlTarget(AbstractTarget):
 
     def up(self, *migrations: Migration, as_dependency: bool):
         for migration in migrations:
-            click.echo(f"Run migration {migration.id}")
             with self.connection.cursor() as cur:
                 # Run up script, command by command.
                 for cmd in migration.commands_of_up_script:
-                    click.echo(f"- {multiple_spaces.sub(" ", cmd)} ", nl=False)
+                    w, h = get_terminal_size()
+                    click.echo(f"[    ] {multiple_spaces.sub(" ", cmd)[:w-7]}", nl=False)
                     cur.execute(cmd.encode('utf-8'))
-                    click.echo("[ ok ]")
+                    click.echo("\r" + click.style("[ ok ]", fg="green") + f" {multiple_spaces.sub(" ", cmd)[:w-7]}")
 
                 # Mark migration as applied.
                 cur.execute(
@@ -153,9 +154,9 @@ class PostgreSqlTarget(AbstractTarget):
             for migration in migrations:
                 click.echo(f"Revert migration {migration.id}")
                 for cmd in migration.commands_of_down_script:
-                    click.echo(f"- {multiple_spaces.sub(" ", cmd)} ", nl=False)
+                    click.echo(f"[    ] {multiple_spaces.sub(" ", cmd)}", nl=False)
                     cur.execute(cmd.encode('utf-8'))
-                    click.echo("[ ok ]")
+                    click.echo(f"\r[ ok ] {multiple_spaces.sub(" ", cmd)}")
                 cur.execute("delete from mitch.applied_migrations where repository_id = %s and migration_id = %s", migration.id)
         try:
             del self.applications
