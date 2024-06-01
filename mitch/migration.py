@@ -1,7 +1,7 @@
-from collections import namedtuple
+from functools import cache, cached_property
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Set, List, Self, TYPE_CHECKING
+from typing import Optional, Set, List, Self
 from datetime import datetime
 from hashlib import sha256
 import tomllib
@@ -30,11 +30,11 @@ class Migration:
     def __hash__(self) -> int:
         return hash((self.id))
 
-    @property
+    @cached_property
     def id(self) -> CompositeId:
         return CompositeId(self.repository.name, self.migration_id)
 
-    @property
+    @cached_property
     def sort_key(self) -> tuple[datetime, str, str]:
         """
         Sort by creation date, then by repository id, then by migration id, so that the order is deterministic.
@@ -56,25 +56,25 @@ class Migration:
             **config
         )
 
-    @property
+    @cached_property
     def recursive_dependencies(self) -> Set[Self]:
         out = set(self.resolved_dependencies)
         for dep in self.resolved_dependencies:
             out |= dep.recursive_dependencies
         return out
 
-    @property
+    @cached_property
     def recursive_dependants(self) -> Set[Self]:
         out = set(self.resolved_dependants)
         for dep in self.resolved_dependants:
             out |= dep.recursive_dependants
         return out
 
-    @property
+    @cached_property
     def up_script(self) -> str:
         return self.directory.joinpath("up.sql").read_text("utf-8")
 
-    @property
+    @cached_property
     def reformatted_up_script(self) -> str:
         return "\n\n".join(
             sqlparse.format(
@@ -92,7 +92,7 @@ class Migration:
             for cmd in self.commands_of_up_script
         )
 
-    @property
+    @cached_property
     def commands_of_up_script(self) -> List[str]:
         return [
             cmd
@@ -100,7 +100,7 @@ class Migration:
             if not (cmd.isspace() or cmd.startswith("--"))
         ]
 
-    @property
+    @cached_property
     def commands_of_down_script(self) -> List[str]:
         return [
             cmd
@@ -108,15 +108,15 @@ class Migration:
             if not (cmd.isspace() or cmd.startswith("--"))
         ]
 
-    @property
+    @cached_property
     def up_script_sha256(self) -> str:
         return sha256(self.up_script.encode("utf-8")).hexdigest()
 
-    @property
+    @cached_property
     def reformatted_up_script_sha256(self) -> str:
         return sha256(self.reformatted_up_script.encode("utf-8")).hexdigest()
 
-    @property
+    @cached_property
     def down_script(self) -> str:
         return self.directory.joinpath("down.sql").read_text("utf-8")
 

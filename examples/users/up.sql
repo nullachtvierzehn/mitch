@@ -11,5 +11,4 @@ create table if not exists test123.users (
 
 
 alter table test123.users 
-    add column if not exists irgendwas text,
-    add column if not exists irgendwas2 text; --oebbis
+    add column if not exists irgendwas text;

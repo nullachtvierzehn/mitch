@@ -124,7 +124,7 @@ def down(migration: typing.List[str], yes: bool, prune: bool, target: str):
     confirm_migrations = list(m for m, a in t.with_applications(dependants) if a and m not in chosen_migrations)
     confirm_migrations.sort(key=lambda m: m.id)
     if not yes and len(confirm_migrations) > 0:
-        click.echo(f"The following migrations will be removed:")
+        click.echo(f"The following migrations must be removed, too:")
         for m in confirm_migrations:
             click.echo(f"- {m.id}")
         if not click.confirm("Do you want to remove them?"):
@@ -132,9 +132,7 @@ def down(migration: typing.List[str], yes: bool, prune: bool, target: str):
 
     # Execute migrations in topological order
     with t.transaction():
-        for m, a in t.with_applications(dependants):
-            if a:
-                t.down(m)
+        t.down(*(m for m, a in t.with_applications(dependants) if a))
     
         # Prune migrations, if requested.
         if prune:
@@ -166,19 +164,72 @@ def prune(except_ids: typing.List[str], except_files: typing.List[str]):
     t.prune(repository, except_migrations=to_be_installed)
 
 
+@cli.command()
+@click.option("--yes", is_flag=True, default=False)
+@click.argument("migration", nargs=-1, shell_complete=complete_installed_migration_id)
+def rerun_modified(migration: typing.List[str], yes: bool):
+    target = PostgreSqlTarget(psycopg.connect())
+    try:
+        repository = Repository.from_closest_parent()
+    except (FileNotFoundError, NotADirectoryError) as e:
+        raise click.UsageError(str(e)) from e
+    
+    # Get modified migrations.
+    modified = set(target.modified_migrations(repository))
+    selected = set(repository.by_ids(migration))
+    if len(selected) > 0:
+        # Optionally restrict the operation to the given ids.
+        modified &= selected
+    if len(modified) == 0:
+        return sys.exit(0)
+    
+    # Tell about selected, but unmodified migrations.
+    if (unmodified := selected - modified):
+        click.echo(f"The following migrations have not been modified and don't need to be re-runned:")
+        for m in unmodified:
+            click.echo(f"- {m.id}")
+
+    # Fetch dependants, because they must be reverted first.
+    with_dependants = list((m, a) for (m, a) in target.with_applications(repository.dependants_of(modified)) if a)
+
+    # Confirm migrations that must be taken down but weren't explicitely selected.
+    to_be_confirmed = list(m for m, a in with_dependants if m not in selected)
+    if to_be_confirmed and not yes:
+        click.echo(f"Must also re-run the following migrations:")
+        for m in to_be_confirmed:
+            click.echo(f"- {m.id}")
+        if not click.confirm("Do you want to re-run them?"):
+            return sys.exit(0)
+
+    with target.transaction():
+        target.down(*[m for (m, a) in with_dependants])
+        for m, a in reversed(with_dependants):
+            target.up(m, as_dependency=a.is_dependency)
+
 @cli.group()
 def ls():
     pass
 
 @ls.command("up")
 @click.option("--include-dependencies/--without-dependencies", "-d/-D", default=False)
-def list_migrations_if_up(include_dependencies: bool):
+def list_up_migrations(include_dependencies: bool):
     target = PostgreSqlTarget(psycopg.connect())
     try:
         repository = Repository.from_closest_parent()
     except (FileNotFoundError, NotADirectoryError) as e:
         raise click.UsageError(str(e)) from e
     for migration in target.installed_migrations(repository, include_dependencies=include_dependencies):
+        click.echo(f"{migration.id}")
+
+
+@ls.command("modified")
+def list_modified_migrations():
+    target = PostgreSqlTarget(psycopg.connect())
+    try:
+        repository = Repository.from_closest_parent()
+    except (FileNotFoundError, NotADirectoryError) as e:
+        raise click.UsageError(str(e)) from e
+    for migration in target.modified_migrations(repository):
         click.echo(f"{migration.id}")
 
 
@@ -205,7 +256,7 @@ if __name__ == "__main__":
 # Roadmap:
 # - [ ] Command to add migrations
 # - [ ] Command to rework a migration, similar to sqitch rework.
-# - [ ] Command to re-apply some migrations, similar to sqitch rebase.
+# - [x] Command to re-apply some migrations, similar to sqitch rebase.
 # - [x] Command to apply migrations from a plan (like a pip install from a requirements file.)
 # - [?] Command to unapply/apply migrations from a plan when changing git branches (like sqitch checkout)
 # - [x] Command to remove all migrations that no-one depends on.

@@ -21,13 +21,11 @@ class AbstractTarget:
 
 class PostgreSqlTarget(AbstractTarget):
     connection: Connection
-    _applications: Dict[CompositeId, MigrationApplication]
 
     def __init__(self, connection: Connection):
         self.connection = connection
         self.connection.autocommit = False
         self.install_or_update_mitch_in_database()
-        self._applications = dict()
         super().__init__()
     
     def transaction(self, force_rollback: bool = False):
@@ -82,10 +80,10 @@ class PostgreSqlTarget(AbstractTarget):
             if m and (not a.is_dependency or include_dependencies):
                 yield m
     
-    def modified_migrations(self, repository: Repository) -> Generator[tuple[MigrationApplication, Migration], None, None]:
+    def modified_migrations(self, repository: Repository) -> Generator[Migration, None, None]:
         for a, m in repository.with_migrations(self.applications.values()):
             if m and not a.matches(m):
-                yield a, m
+                yield m
 
     def prune(self, repository: Repository, except_migrations: Collection[Migration] = ()) -> None:
         installed_migrations = set(self.installed_migrations(repository, include_dependencies=True))
@@ -105,56 +103,64 @@ class PostgreSqlTarget(AbstractTarget):
                 self.down(m)
 
 
-    def up(self, migration: Migration, as_dependency: bool):
-        click.echo(f"Run migration {migration.id}")
-        with self.connection.cursor() as cur:
-            # Run up script, command by command.
-            for cmd in migration.commands_of_up_script:
-                click.echo(f"- {multiple_spaces.sub(" ", cmd)} ", nl=False)
-                cur.execute(cmd.encode('utf-8'))
-                click.echo("[ ok ]")
+    def up(self, *migrations: Migration, as_dependency: bool):
+        for migration in migrations:
+            click.echo(f"Run migration {migration.id}")
+            with self.connection.cursor() as cur:
+                # Run up script, command by command.
+                for cmd in migration.commands_of_up_script:
+                    click.echo(f"- {multiple_spaces.sub(" ", cmd)} ", nl=False)
+                    cur.execute(cmd.encode('utf-8'))
+                    click.echo("[ ok ]")
 
-            # Mark migration as applied.
-            cur.execute(
-                """
-                insert into mitch.repositories (repository_id)
-                values (%s)
-                on conflict (repository_id) do nothing;
-                """,
-                (migration.repository.name,)
-            )
+                # Mark migration as applied.
+                cur.execute(
+                    """
+                    insert into mitch.repositories (repository_id)
+                    values (%s)
+                    on conflict (repository_id) do nothing;
+                    """,
+                    (migration.repository.name,)
+                )
 
-            cur.execute(
-                """
-                insert into mitch.applied_migrations 
-                    (repository_id, migration_id, is_dependency, up_script_sha256, reformatted_up_script_sha256) 
-                values (%s, %s, %s, %s, %s)
-                on conflict (repository_id, migration_id) do update set
-                    is_dependency = excluded.is_dependency,
-                    up_script_sha256 = excluded.up_script_sha256,
-                    reformatted_up_script_sha256 = excluded.reformatted_up_script_sha256,
-                    applied_at = excluded.applied_at,
-                    applied_by = excluded.applied_by
-                """,
-                (
-                    migration.repository.name,
-                    migration.migration_id,
-                    as_dependency,
-                    migration.up_script_sha256,
-                    migration.reformatted_up_script_sha256,
-                ),
-            )
-        del self.applications
+                cur.execute(
+                    """
+                    insert into mitch.applied_migrations 
+                        (repository_id, migration_id, is_dependency, up_script_sha256, reformatted_up_script_sha256) 
+                    values (%s, %s, %s, %s, %s)
+                    on conflict (repository_id, migration_id) do update set
+                        is_dependency = excluded.is_dependency,
+                        up_script_sha256 = excluded.up_script_sha256,
+                        reformatted_up_script_sha256 = excluded.reformatted_up_script_sha256,
+                        applied_at = excluded.applied_at,
+                        applied_by = excluded.applied_by
+                    """,
+                    (
+                        migration.repository.name,
+                        migration.migration_id,
+                        as_dependency,
+                        migration.up_script_sha256,
+                        migration.reformatted_up_script_sha256,
+                    ),
+                )
+        try:
+            del self.applications
+        except AttributeError:
+            pass  # ignore repeated deletions without prior re-computations
     
-    def down(self, migration: Migration):
+    def down(self, *migrations: Migration):
         with self.connection.cursor() as cur:
-            click.echo(f"Revert migration {migration.id}")
-            for cmd in migration.commands_of_down_script:
-                click.echo(f"- {multiple_spaces.sub(" ", cmd)} ", nl=False)
-                cur.execute(cmd.encode('utf-8'))
-                click.echo("[ ok ]")
-            cur.execute("delete from mitch.applied_migrations where migration_id = %s", (migration.id,))
-        del self.applications
+            for migration in migrations:
+                click.echo(f"Revert migration {migration.id}")
+                for cmd in migration.commands_of_down_script:
+                    click.echo(f"- {multiple_spaces.sub(" ", cmd)} ", nl=False)
+                    cur.execute(cmd.encode('utf-8'))
+                    click.echo("[ ok ]")
+                cur.execute("delete from mitch.applied_migrations where repository_id = %s and migration_id = %s", migration.id)
+        try:
+            del self.applications
+        except AttributeError:
+            pass  # ignore repeated deletions without prior re-computations
     
     def fix_hashes_and_status(self, migration: Migration, is_dependency: bool):
         with self.connection.cursor() as cur:
