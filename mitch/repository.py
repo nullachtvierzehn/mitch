@@ -10,6 +10,7 @@ from .utils import CompositeId
 class Repository:
     root_folder: Path
     config_file: Path
+    parent: Optional[Self]
     name: str
 
     @classmethod
@@ -45,7 +46,20 @@ class Repository:
             raise ValueError(f"No repository name found in {config_file}")
         self.name = name
         super().__init__()
-    
+
+    def _discover_subrepositories(self, directory: Path) -> Generator[Path, None, None]:
+        return directory.glob("**/mitch.toml")
+
+    @cached_property
+    def subrepositories(self) -> Dict[str, Self]:
+        # Fetch configs from disk
+        _subrepositories: Dict[str, Self] = {}
+        for config_path in self._discover_subrepositories(self.root_folder):
+            subrepository = self.__class__(config_path.parent)
+            subrepository.parent = self
+            _subrepositories[subrepository.name] = subrepository
+        return _subrepositories
+
     def _discover_migrations(self, directory: Path) -> Generator[Path, None, None]:
         # Is this a migration directory?
         if (migration := directory / "migration.toml").is_file():
@@ -67,6 +81,8 @@ class Repository:
         _migrations: Dict[CompositeId, 'Migration'] = {}
         for config_path in self._discover_migrations(self.root_folder):
             migration = Migration.from_config(config_path, repository=self)
+            if migration.id in _migrations:
+                raise ValueError(f"Duplicate migration id {migration.id}")
             _migrations[migration.id] = migration
         
         # Connect dependencies
@@ -126,10 +142,31 @@ class Repository:
     
     def _normalize_id(self, id: str | tuple[str, str]) -> CompositeId:
         return CompositeId.from_string_or_tuple(id, self.name)
+    
+    def _search_subrepository_by_id(self, id: str, skip_parents: bool = False, skip_children: bool = False) -> Generator[Self, None, Self]:
+        # FIX SEARCH OF SUBREPOSITORIES
+        if id == self.name:
+            return self
+        elif (subrepo := self.subrepositories.get(id)):
+            return subrepo
+        else:
+            # Search sub-repositories
+            #if not skip_children:
+            #    for subrepo in self.subrepositories.values():
+            #        yield from subrepo._search_subrepository_by_id(id, skip_parents=True)
+            # Search parent repository
+            #if self.parent and not skip_parents:
+            #    yield from self.parent._search_subrepository_by_id(id, skip_children=True)
+            raise KeyError(f"Unknown repository {id}")
 
     def by_id(self, id: str | tuple[str, str]) -> 'Migration':
-        try: 
-            return self.migrations[self._normalize_id(id)]
+        normalized_id = self._normalize_id(id)
+        for repository in self._search_subrepository_by_id(normalized_id.repository_id):
+            break
+        else:
+            raise KeyError(f"Unknown repository {normalized_id.repository_id}")
+        try:
+            return repository.migrations[normalized_id]
         except KeyError as e:
             raise KeyError(f"Unknown migration {id}") from e
 
