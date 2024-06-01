@@ -8,7 +8,7 @@ import tomllib
 
 import sqlparse    
 
-from .utils import CompositeId
+from .utils import CompositeId, reformat_sql, split_sql
 
 @dataclass
 class Migration:
@@ -76,37 +76,19 @@ class Migration:
 
     @cached_property
     def reformatted_up_script(self) -> str:
-        return "\n\n".join(
-            sqlparse.format(
-                cmd,
-                keyword_case="lower",
-                identifier_case="lower",
-                strip_comments=True,
-                reindent=True,
-                reindent_aligned=True,
-                use_space_around_operators=True,
-                indent_tabs=False,
-                indent_width=2,
-                comma_first=True,
-            )
-            for cmd in self.commands_of_up_script
-        )
+        return "\n\n".join(cmd.strip() for cmd in self.commands_of_up_script if not cmd.isspace())
 
     @cached_property
     def commands_of_up_script(self) -> List[str]:
-        return [
-            cmd
-            for cmd in sqlparse.split(self.up_script)
-            if not (cmd.isspace() or cmd.startswith("--"))
-        ]
+        return split_sql(reformat_sql(self.up_script))
+
+    @cached_property
+    def reformatted_down_script(self) -> str:
+        return "\n\n".join(cmd.strip() for cmd in self.commands_of_down_script if not cmd.isspace())
 
     @cached_property
     def commands_of_down_script(self) -> List[str]:
-        return [
-            cmd
-            for cmd in sqlparse.split(self.down_script)
-            if not (cmd.isspace() or cmd.startswith("--"))
-        ]
+        return split_sql(reformat_sql(self.down_script))
 
     @cached_property
     def up_script_sha256(self) -> str:
