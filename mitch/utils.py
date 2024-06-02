@@ -3,6 +3,7 @@ from collections import namedtuple
 
 import sqlparse
 
+
 def reformat_sql(script: str) -> str:
     return sqlparse.format(
         script,
@@ -17,13 +18,15 @@ def reformat_sql(script: str) -> str:
         comma_first=True,
     )
 
-def split_sql(script: str) -> list[str]:
-    return sqlparse.split(script)
 
-class CompositeId(namedtuple('CompositeId', ['repository_id','migration_id'])):
+def split_sql(script: str) -> list[str]:
+    return [l.strip() for l in sqlparse.split(script) if not l.isspace()]
+
+
+class CompositeId(namedtuple("CompositeId", ["repository_id", "migration_id"])):
     def __str__(self) -> str:
         return f"{self.repository_id}::{self.migration_id}"
-    
+
     @classmethod
     def from_string(cls, string: str, prefix: Optional[str] = None) -> Self:
         parts = tuple(string.split("::", 1))
@@ -37,9 +40,13 @@ class CompositeId(namedtuple('CompositeId', ['repository_id','migration_id'])):
     @classmethod
     def from_tuple(cls, tuple: tuple[str, str]) -> Self:
         return cls(*tuple)
-    
+
     @classmethod
-    def from_string_or_tuple(cls, string_or_tuple: str | tuple[str] | tuple[str, str], prefix: Optional[str] = None) -> Self:
+    def from_string_or_tuple(
+        cls,
+        string_or_tuple: str | tuple[str] | tuple[str, str],
+        prefix: Optional[str] = None,
+    ) -> Self:
         if isinstance(string_or_tuple, tuple):
             if len(string_or_tuple) == 2:
                 return cls.from_tuple(string_or_tuple)

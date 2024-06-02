@@ -6,24 +6,20 @@ from datetime import datetime
 from hashlib import sha256
 import tomllib
 
-import sqlparse    
 
 from .utils import CompositeId, reformat_sql, split_sql
+
 
 @dataclass
 class Migration:
     directory: Path
     migration_id: str
-    repository: 'Repository'
+    repository: "Repository"
     author: Optional[str] = None
     created_at: Optional[datetime] = None
     dependencies: Set[str] = field(default_factory=set)
-    resolved_dependencies: Set[Self] = field(
-        default_factory=set, init=False
-    )
-    resolved_dependants: Set[Self] = field(
-        default_factory=set, init=False
-    )
+    resolved_dependencies: Set[Self] = field(default_factory=set, init=False)
+    resolved_dependants: Set[Self] = field(default_factory=set, init=False)
     idempotent: bool = False
     transactional: bool = True
 
@@ -40,16 +36,24 @@ class Migration:
         Sort by creation date, then by repository id, then by migration id, so that the order is deterministic.
         In case of unknown creation date, we use datetime.min to sort the migrations at the beginning of the list.
         """
-        return (self.created_at or datetime.min, self.repository.name, self.migration_id)
+        return (
+            self.created_at or datetime.min,
+            self.repository.name,
+            self.migration_id,
+        )
 
     @classmethod
-    def from_config(cls, config_path: Path, repository: 'Repository') -> Self:
+    def from_config(cls, config_path: Path, repository: "Repository") -> Self:
         config = tomllib.loads(config_path.read_text("utf-8"))
-        migration_id = config.pop("id", str(config_path.parent.relative_to(repository.root_folder)))
+        migration_id = config.pop(
+            "id", str(config_path.parent.relative_to(repository.root_folder))
+        )
         relations = config.pop("relations", {})
-        dependencies = relations.get("dependencies") or config.pop("dependencies") or set()
+        dependencies = (
+            relations.get("dependencies") or config.pop("dependencies") or set()
+        )
         return cls(
-            directory=config_path.parent, 
+            directory=config_path.parent,
             dependencies=dependencies,
             migration_id=migration_id,
             repository=repository,
@@ -76,7 +80,7 @@ class Migration:
 
     @cached_property
     def reformatted_up_script(self) -> str:
-        return "\n\n".join(cmd.strip() for cmd in self.commands_of_up_script if not cmd.isspace())
+        return "\n\n".join(self.commands_of_up_script)
 
     @cached_property
     def commands_of_up_script(self) -> List[str]:
@@ -84,7 +88,7 @@ class Migration:
 
     @cached_property
     def reformatted_down_script(self) -> str:
-        return "\n\n".join(cmd.strip() for cmd in self.commands_of_down_script if not cmd.isspace())
+        return "\n\n".join(self.commands_of_down_script)
 
     @cached_property
     def commands_of_down_script(self) -> List[str]:
@@ -118,7 +122,11 @@ class MigrationApplication:
         return CompositeId(self.repository_id, self.migration_id)
 
     def matches(self, migration: Migration) -> bool:
-        return self.up_script_sha256 == migration.up_script_sha256 or self.reformatted_up_script_sha256 == migration.reformatted_up_script_sha256
+        return (
+            self.up_script_sha256 == migration.up_script_sha256
+            or self.reformatted_up_script_sha256
+            == migration.reformatted_up_script_sha256
+        )
 
 
 from .repository import Repository
