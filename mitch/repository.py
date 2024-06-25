@@ -13,12 +13,12 @@ class Repository:
     name: str
     is_root: bool = False
     _instantiated: bool = False
-    _migrations: Dict[CompositeId, 'Migration']
+    _migrations: Dict[CompositeId, "Migration"]
     _repositories_by_path: Dict[Path, Self] = {}
 
     def __new__(cls, root_folder: Path = Path.cwd()) -> Self:
         root_folder = root_folder.resolve()
-        try: 
+        try:
             return cls._repositories_by_path[root_folder]
         except KeyError:
             inst = super().__new__(cls)
@@ -36,14 +36,16 @@ class Repository:
         for directory in reversed(self_and_parents):
             if (config_file := directory / "mitch.toml").is_file():
                 config = tomllib.load(config_file.open(mode="rb"))
-                if 'repository' in config:
+                if "repository" in config:
                     return cls(root_folder=directory)
         else:
-            raise FileNotFoundError(f"Found no mitch.toml with a repository section in {directory} or its parents.")
+            raise FileNotFoundError(
+                f"Found no mitch.toml with a repository section in {directory} or its parents."
+            )
 
     def __repr__(self) -> str:
         return f"Repository(name={self.name}, root_folder={self.root_folder}, is_root={self.is_root})"
-    
+
     def __str__(self) -> str:
         return self.__repr__()
 
@@ -56,7 +58,7 @@ class Repository:
         # Check that root_folder is a directory.
         if not root_folder.is_dir():
             raise NotADirectoryError(f"{root_folder} is not a directory")
-        
+
         # Load config from mitch.toml.
         if not (config_file := root_folder / "mitch.toml").is_file():
             raise FileNotFoundError(f"No mitch.toml file found in {root_folder}")
@@ -64,19 +66,19 @@ class Repository:
         with config_file.open(mode="rb") as config_file:
             config = tomllib.load(config_file)
             # Get repository section.
-            try: 
-                repository = config['repository']
+            try:
+                repository = config["repository"]
             except KeyError:
                 raise ValueError(f"Missing repository section in {config_file}")
-            
+
             # Get name
-            try: 
-                name = repository['name']
-            except KeyError: 
+            try:
+                name = repository["name"]
+            except KeyError:
                 raise ValueError(f"Missing name in repository section of {config_file}")
-            
-            is_root = repository.get('root', False)
-        
+
+            is_root = repository.get("root", False)
+
         # Read repository name.
         self.root_folder = root_folder
         self.name = name
@@ -99,7 +101,7 @@ class Repository:
             subrepository = self.__class__(config_path.parent)
             _subrepositories[subrepository.name] = subrepository
         return _subrepositories
-    
+
     @cached_property
     def parent(self) -> Optional[Self]:
         if self.is_root:
@@ -120,18 +122,18 @@ class Repository:
         # Is this a migration directory?
         if (migration := directory / "migration.toml").is_file():
             yield migration
-        
+
         for child in directory.iterdir():
             # Skip non-directories
             if not child.is_dir():
                 continue
-            # Skip directories that belong to sub-repositories  
+            # Skip directories that belong to sub-repositories
             if (child / "mitch.toml").is_file():
                 continue
             # Recurse
             yield from self._discover_migrations(child)
 
-    def _load_migrations(self) -> Dict[CompositeId, 'Migration']:
+    def _load_migrations(self) -> Dict[CompositeId, "Migration"]:
         try:
             self._migrations.clear()
         except AttributeError:
@@ -142,12 +144,12 @@ class Repository:
                 raise ValueError(f"Duplicate migration id {migration.id}")
             self._migrations[migration.id] = migration
         return self._migrations
-    
+
     def _connect_dependencies(self) -> None:
         # Re-initialize dependencies, if empty
         if not self._migrations:
             self._load_migrations()
-        
+
         # Connect dependencies
         for migration in self._migrations.values():
             for dependency_name in migration.dependencies:
@@ -170,14 +172,16 @@ class Repository:
                     dependency.resolved_dependants.add(migration)
 
     @property
-    def migrations(self) -> Dict[CompositeId, 'Migration']:
+    def migrations(self) -> Dict[CompositeId, "Migration"]:
         try:
             return self._migrations
         except AttributeError:
             self._load_migrations()
             return self._migrations
-    
-    def dependencies_of(self, migrations: Iterable['Migration']) -> Generator['Migration', None, None]:
+
+    def dependencies_of(
+        self, migrations: Iterable["Migration"]
+    ) -> Generator["Migration", None, None]:
         sorter = TopologicalSorter[Migration]()
         for m in migrations:
             sorter.add(m, *m.resolved_dependencies)
@@ -190,8 +194,10 @@ class Repository:
             # In case of unknown creation date, we use datetime.min to sort the migrations at the beginning of the list.
             yield from sorted(nodes, key=lambda m: m.sort_key)
             sorter.done(*nodes)
-    
-    def dependants_of(self, migrations: Iterable['Migration']) -> Generator['Migration', None, None]:
+
+    def dependants_of(
+        self, migrations: Iterable["Migration"]
+    ) -> Generator["Migration", None, None]:
         sorter = TopologicalSorter[Migration]()
         for m in migrations:
             sorter.add(m, *m.resolved_dependants)
@@ -205,14 +211,16 @@ class Repository:
             yield from sorted(nodes, key=lambda m: m.sort_key, reverse=True)
             sorter.done(*nodes)
 
-    def by_ids(self, ids: Iterable[str | tuple[str, str]]) -> Generator['Migration', None, None]:
+    def by_ids(
+        self, ids: Iterable[str | tuple[str, str]]
+    ) -> Generator["Migration", None, None]:
         for id in ids:
             yield self.by_id(id)
-    
+
     def _normalize_id(self, id: str | tuple[str, str]) -> CompositeId:
         return CompositeId.from_string_or_tuple(id, self.name)
 
-    def by_id(self, id: str | tuple[str, str]) -> 'Migration':
+    def by_id(self, id: str | tuple[str, str]) -> "Migration":
         normalized_id = self._normalize_id(id)
         if self.name == normalized_id.repository_id:
             repository = self
@@ -220,13 +228,17 @@ class Repository:
             try:
                 repository = self.root.subrepositories[normalized_id.repository_id]
             except KeyError as e:
-                raise KeyError(f"Unknown repository {normalized_id.repository_id}") from e
+                raise KeyError(
+                    f"Unknown repository {normalized_id.repository_id}"
+                ) from e
         try:
             return repository.migrations[normalized_id]
         except KeyError as e:
             raise KeyError(f"Unknown migration {id}") from e
 
-    def with_migrations(self, applications: Iterable['MigrationApplication']) -> Generator[tuple['MigrationApplication', Optional['Migration']], None, None]:
+    def with_migrations(
+        self, applications: Iterable["MigrationApplication"]
+    ) -> Generator[tuple["MigrationApplication", Optional["Migration"]], None, None]:
         for a in applications:
             try:
                 yield a, self.by_id(a.id)
