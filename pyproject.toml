@@ -12,7 +12,7 @@ psycopg = "^3.1.19"
 click = "^8.1.7"
 
 [tool.poetry.scripts]
-mitch = "mitch.cli:cli"
+mitch = "mitch.cli.groups:root"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.4.2"
